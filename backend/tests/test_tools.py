@@ -174,18 +174,9 @@ async def test_generate_flowchart():
 # --- 4. EXPLAIN DATA TOOL TESTS ---
 
 @pytest.mark.asyncio
-@patch("app.tools.explain_tool.genai.Client")
-async def test_explain_data_success(mock_genai_client):
-    # Setup mock Client response
-    mock_response = MagicMock()
-    mock_response.text = "This query shows our highest paying customer is Alice."
-    
-    mock_aio_models = AsyncMock()
-    mock_aio_models.generate_content.return_value = mock_response
-    
-    mock_client_instance = MagicMock()
-    mock_client_instance.aio.models = mock_aio_models
-    mock_genai_client.return_value = mock_client_instance
+@patch("app.tools.explain_tool.generate_text")
+async def test_explain_data_success(mock_generate_text):
+    mock_generate_text.return_value = "This query shows our highest paying customer is Alice."
 
     res = await explain_data(
         query="SELECT name FROM customers",
@@ -194,6 +185,66 @@ async def test_explain_data_success(mock_genai_client):
     )
     assert res["success"] is True
     assert "Alice" in res["explanation"]
+    assert "anomalies" in res
+
+
+# --- 4b. ANOMALY DETECTION TESTS ---
+
+def test_detect_anomalies_no_anomalies():
+    from app.analysis.anomaly import detect_anomalies
+    # Test with too few rows (should return empty list)
+    data = [{"val": 10}, {"val": 12}, {"val": 11}]
+    res = detect_anomalies(["val"], data)
+    assert res == []
+
+
+def test_detect_anomalies_with_zscore_anomaly():
+    from app.analysis.anomaly import detect_anomalies
+    # 6 rows, one is a massive spike (100 vs ~10)
+    data = [
+        {"val": 10}, {"val": 11}, {"val": 9},
+        {"val": 12}, {"val": 10}, {"val": 100}
+    ]
+    res = detect_anomalies(["val"], data)
+    assert len(res) == 1
+    assert "spiked" in res[0]["description"].lower()
+    assert res[0]["column"] == "val"
+
+
+# --- 4c. SQL SELF-CORRECTION TESTS ---
+
+@pytest.mark.asyncio
+@patch("app.tools.query_tool.get_pool")
+@patch("app.tools.query_tool._attempt_self_correction")
+async def test_execute_query_syntax_error_with_correction(mock_self_correct, mock_get_pool):
+    mock_conn = AsyncMock()
+    mock_row = MagicMock()
+    mock_row.keys.return_value = ["id", "name"]
+    mock_row.__getitem__.side_effect = lambda k: {"id": 1, "name": "Alice"}[k]
+    mock_row.items.return_value = [("id", 1), ("name", "Alice")]
+
+    import asyncpg
+    mock_conn.fetch.side_effect = [
+        asyncpg.exceptions.PostgresSyntaxError("syntax error near SELECT"),
+        [mock_row]
+    ]
+
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    mock_pool = MagicMock()
+    mock_pool.acquire = MagicMock(return_value=mock_ctx)
+    mock_get_pool.return_value = mock_pool
+
+    mock_self_correct.return_value = "SELECT id, name FROM customers"
+
+    res = await execute_query("SELECT id, name FROMM customers")
+
+    assert res["success"] is True
+    assert res["self_corrected"] is True
+    assert res["sql_executed"].startswith("SELECT id, name FROM customers")
+    assert res["rows"][0]["name"] == "Alice"
 
 
 # --- 5. SCHEMA TOOL TESTS ---

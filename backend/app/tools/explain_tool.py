@@ -1,12 +1,19 @@
 from app.config import settings
-from google import genai
+from app.gemini_client import generate_text
+from app.analysis.anomaly import detect_anomalies
 
 async def explain_data(query: str, data: list[dict], context: str = "") -> dict:
     """Tool entrypoint. Invokes Gemini to explain/summarize the data returned
-    by execute_query in plain, natural language.
+    by execute_query in plain, natural language, incorporating statistical anomalies.
     """
-    client = genai.Client(api_key=settings.gemini_api_key)
-    
+    # Expose and run statistical anomaly detection
+    columns = list(data[0].keys()) if data else []
+    anomalies = []
+    try:
+        anomalies = detect_anomalies(columns, data)
+    except Exception:
+        pass
+
     # Restrict data size passed to prompt to avoid context limit issues
     truncated_data = data[:100]
     prompt = (
@@ -14,20 +21,23 @@ async def explain_data(query: str, data: list[dict], context: str = "") -> dict:
         f"SQL Query: {query}\n"
         f"Query Results (JSON format, up to first 100 rows):\n{truncated_data}\n\n"
     )
+    if anomalies:
+        anomalies_text = "\n".join(f"- {a['description']}" for a in anomalies)
+        prompt += f"Detected Statistical Anomalies:\n{anomalies_text}\n\n"
+
     if context:
         prompt += f"User's analytical context/focus: {context}\n\n"
         
-    prompt += "Provide a natural language summary listing key metrics, trends, and business insights. Keep the tone professional, helpful, and concise."
+    prompt += "Provide a natural language summary listing key metrics, trends, and business insights. Specifically mention any detected anomalies and their potential impact. Keep the tone professional, helpful, and concise."
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-        )
-        explanation = response.text or "Could not generate explanation for the data."
+        explanation = await generate_text(prompt)
+        if not explanation:
+            explanation = "Could not generate explanation for the data."
         return {
             "success": True,
-            "explanation": explanation
+            "explanation": explanation,
+            "anomalies": anomalies
         }
     except Exception as exc:  # noqa: BLE001
         return {

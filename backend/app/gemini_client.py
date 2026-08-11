@@ -186,6 +186,22 @@ async def generate_turn(contents: list[types.Content], tool_declarations: list[d
     )
 
 
+async def generate_text(prompt: str, system_instruction: str | None = None) -> str:
+    """Centralized text generation helper to keep tools and modules provider-agnostic."""
+    config = None
+    if system_instruction:
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2,
+        )
+    response = await _client.aio.models.generate_content(
+        model=settings.gemini_model,
+        contents=prompt,
+        config=config,
+    )
+    return response.text or ""
+
+
 def model_turn_content(response) -> types.Content:
     """The model's own turn (may contain a function_call part), to be
     appended to history verbatim before the tool result."""
