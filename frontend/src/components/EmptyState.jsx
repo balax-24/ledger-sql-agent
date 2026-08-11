@@ -1,4 +1,6 @@
-const SUGGESTIONS = [
+import { useState, useEffect } from "react";
+
+const DEFAULT_SUGGESTIONS = [
   "Show me the top 5 products by revenue this quarter",
   "Draw me the ER diagram for this database",
   "Create a flowchart showing how orders flow through our system",
@@ -6,6 +8,25 @@ const SUGGESTIONS = [
 ];
 
 export default function EmptyState({ onPick }) {
+  const [suggestions, setSuggestions] = useState(DEFAULT_SUGGESTIONS);
+
+  useEffect(() => {
+    async function fetchStarterQuestions() {
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+        const res = await fetch(`${API_BASE}/api/starter-questions`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.questions && data.questions.length > 0) {
+          setSuggestions(data.questions);
+        }
+      } catch (err) {
+        console.error("Failed to load starter questions:", err);
+      }
+    }
+    fetchStarterQuestions();
+  }, []);
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
       <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg border border-accent/40 bg-accent-soft font-display text-lg text-accent">
@@ -16,7 +37,7 @@ export default function EmptyState({ onPick }) {
         No SQL required — describe what you want to know and I'll query it, chart it, or diagram it.
       </p>
       <div className="mt-6 grid w-full max-w-md gap-2">
-        {SUGGESTIONS.map((s) => (
+        {suggestions.map((s) => (
           <button
             key={s}
             onClick={() => onPick(s)}

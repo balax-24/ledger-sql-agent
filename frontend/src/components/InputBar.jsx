@@ -2,47 +2,66 @@ import { useState, useEffect } from "react";
 
 export default function InputBar({ onSend, disabled, onStop, isStreaming, value, setValue }) {
   const [isListening, setIsListening] = useState(false);
-  const [recognition, setRecognition] = useState(null);
+  const [hasSupport, setHasSupport] = useState(false);
+  const [activeRecognition, setActiveRecognition] = useState(null);
 
   useEffect(() => {
-    // Check for speech recognition support
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = "en-US";
-
-      rec.onstart = () => {
-        setIsListening(true);
-      };
-
-      rec.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          setValue((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        }
-      };
-
-      rec.onerror = (event) => {
-        console.error("Speech recognition error:", event.error);
-        setIsListening(false);
-      };
-
-      rec.onend = () => {
-        setIsListening(false);
-      };
-
-      setRecognition(rec);
+      setHasSupport(true);
     }
-  }, [setValue]);
+  }, []);
 
   const toggleListening = () => {
-    if (!recognition) return;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
     if (isListening) {
-      recognition.stop();
+      if (activeRecognition) {
+        activeRecognition.stop();
+      }
+      setIsListening(false);
     } else {
-      recognition.start();
+      try {
+        const rec = new SpeechRecognition();
+        rec.continuous = false;
+        rec.interimResults = false;
+        rec.lang = "en-US";
+
+        rec.onstart = () => {
+          setIsListening(true);
+        };
+
+        rec.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          if (transcript) {
+            setValue((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          }
+        };
+
+        rec.onerror = (event) => {
+          console.error("Speech recognition error:", event.error);
+          setIsListening(false);
+          if (event.error === "not-allowed") {
+            alert("Microphone access denied. Please enable microphone permission in your browser settings to use voice input.");
+          } else if (event.error === "no-speech") {
+            console.log("No speech detected.");
+          } else {
+            alert(`Speech recognition error: ${event.error}`);
+          }
+        };
+
+        rec.onend = () => {
+          setIsListening(false);
+          setActiveRecognition(null);
+        };
+
+        rec.start();
+        setActiveRecognition(rec);
+      } catch (err) {
+        console.error("Failed to start speech recognition:", err);
+        alert("Failed to initialize speech recognition.");
+      }
     }
   };
 
@@ -70,7 +89,7 @@ export default function InputBar({ onSend, disabled, onStop, isStreaming, value,
           className="max-h-32 flex-1 resize-none bg-transparent py-1.5 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none"
         />
 
-        {recognition && (
+        {hasSupport && (
           <button
             type="button"
             onClick={toggleListening}
