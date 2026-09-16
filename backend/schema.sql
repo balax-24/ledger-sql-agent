@@ -38,19 +38,29 @@ create index if not exists idx_order_items_product on order_items(product_id);
 
 -- ---------------------------------------------------------------------
 -- Read-only role. The agent connects as this role, never as the
--- Supabase owner/service role. Even if the SQL-safety check in the
--- run_sql_query tool has a bug, this role physically cannot write.
+-- superuser or admin role. Even if the SQL-safety AST check in the
+-- query tool has an edge case, this role physically cannot write.
 -- ---------------------------------------------------------------------
 do $$
 begin
   if not exists (select from pg_roles where rolname = 'agent_readonly') then
     create role agent_readonly login password 'Mb5xcxCL8hoAygMr';
+  else
+    alter role agent_readonly with password 'Mb5xcxCL8hoAygMr';
   end if;
 end
 $$;
 
-grant usage on schema public to agent_readonly;
-grant select on customers, products, orders, order_items to agent_readonly;
+-- Security hardening: revoke all modifying privileges explicitly
+revoke all on all tables in schema public from agent_readonly;
+revoke all on all sequences in schema public from agent_readonly;
+revoke all on all functions in schema public from agent_readonly;
+revoke create on schema public from agent_readonly;
 
--- Make sure future tables in this schema stay readable but not writable
+-- Grant minimal usage and SELECT only
+grant usage on schema public to agent_readonly;
+grant select on all tables in schema public to agent_readonly;
+
+-- Make sure future tables in this schema stay readable but never writable
 alter default privileges in schema public grant select on tables to agent_readonly;
+alter default privileges in schema public revoke insert, update, delete, truncate on tables from agent_readonly;

@@ -1,105 +1,132 @@
+import decimal
 import math
 from statistics import mean, pstdev
 
-def detect_anomalies(columns: list[str], rows: list[dict]) -> list[dict]:
+from app.config import settings
+
+
+def detect_anomalies(
+    columns: list[str],
+    rows: list[dict],
+    z_threshold: float | None = None,
+    pct_threshold: float | None = None,
+) -> list[dict]:
     """
-    Finds anomalies in numeric columns of a query result.
-    
-    Refinements applied:
-    1. Skips result sets under 6 rows to prevent noise from small datasets.
-    2. Filters out primary-key-shaped columns (e.g., 'id', '*_id', 'id_*') to avoid false positives.
+    Statistical anomaly detection for analytical query results.
+
+    Identifies outliers using leave-one-out Z-score profiling and percentage change
+    relative to the series baseline.
+
+    Rules & Safeguards:
+    1. Requires at least 6 data rows to avoid false alarms on small datasets.
+    2. Filters out primary/foreign key columns (e.g. 'id', '*_id', 'id_*').
+    3. Handles int, float, and decimal.Decimal types.
+    4. Handles constant values and zero standard deviation safely without division by zero.
+    5. Gracefully handles nulls and non-numeric fields.
     """
+    z_threshold = z_threshold if z_threshold is not None else settings.anomaly_z_score_threshold
+    pct_threshold = pct_threshold if pct_threshold is not None else settings.anomaly_percent_change_threshold
+
     anomalies = []
-    
-    # 1. Skip if low row count
-    if len(rows) < 6:
+
+    # 1. Skip small datasets (<6 rows)
+    if not rows or len(rows) < 6:
         return anomalies
 
-    # 2. Identify candidate numeric columns and label column
-    # Filter out columns ending in _id or is literally id
+    # 2. Filter out ID-like columns
     def is_pk_like(col: str) -> bool:
         c = col.lower()
         return c == "id" or c.endswith("_id") or c.startswith("id_")
 
     candidate_cols = [col for col in columns if not is_pk_like(col)]
-    
-    # Find numeric columns
+
     numeric_cols = []
     label_col = None
-    
+
     for col in candidate_cols:
-        # Check if column is numeric
-        values = []
         is_numeric = True
+        numeric_count = 0
         for row in rows:
             val = row.get(col)
             if val is None:
                 continue
-            if isinstance(val, (int, float)):
-                values.append(float(val))
+            if isinstance(val, (int, float, decimal.Decimal)):
+                numeric_count += 1
             else:
                 is_numeric = False
                 break
-        
-        if is_numeric and values:
+
+        if is_numeric and numeric_count > 0:
             numeric_cols.append(col)
         elif not is_numeric and label_col is None:
-            # First non-numeric column is a candidate for label
             label_col = col
 
-    # If no label column was found, use the first column that isn't a pk and isn't numeric,
-    # or fallback to using indices
     if label_col is None:
         non_numeric = [col for col in candidate_cols if col not in numeric_cols]
         if non_numeric:
             label_col = non_numeric[0]
 
-    # Z-score threshold and percent-change threshold
-    Z_SCORE_THRESHOLD = 1.5
-    PERCENT_CHANGE_THRESHOLD = 0.15  # 15%
-
     # 3. Analyze each numeric column
     for num_col in numeric_cols:
-        values = [float(row.get(num_col) or 0) for row in rows]
+        raw_values = []
+        for r in rows:
+            v = r.get(num_col)
+            if v is None:
+                raw_values.append(0.0)
+            elif isinstance(v, decimal.Decimal):
+                raw_values.append(float(v))
+            else:
+                try:
+                    raw_values.append(float(v))
+                except (ValueError, TypeError):
+                    raw_values.append(0.0)
+
         labels = [str(row.get(label_col) if label_col else idx) for idx, row in enumerate(rows)]
-        
-        # Check anomalies using leave-current-out baseline
-        for i in range(1, len(values)):
-            current = values[i]
-            previous = values[i - 1]
-            if previous == 0:
-                continue
-                
-            baseline_values = values[:i] + values[i + 1 :]
+
+        for i in range(len(raw_values)):
+            current = raw_values[i]
+            baseline_values = raw_values[:i] + raw_values[i + 1 :]
+
             if len(baseline_values) < 2:
                 continue
-                
+
             b_mean = mean(baseline_values)
             b_stdev = pstdev(baseline_values)
-            if b_stdev == 0:
-                b_stdev = 1e-9
-                
+
+            # If all values are identical or zero deviation, no anomaly
+            if b_stdev == 0 or math.isclose(b_stdev, 0, abs_tol=1e-9):
+                continue
+
             z_score = (current - b_mean) / b_stdev
-            percent_change = (current - previous) / abs(previous)
-            
-            if abs(z_score) >= Z_SCORE_THRESHOLD and abs(percent_change) >= PERCENT_CHANGE_THRESHOLD:
-                severity = "drop" if percent_change < 0 else "spike"
+
+            # Compare against previous row if i > 0, else baseline mean
+            if i > 0 and raw_values[i - 1] != 0:
+                percent_change = (current - raw_values[i - 1]) / abs(raw_values[i - 1])
+                comparison_ref = f"from {round(raw_values[i - 1], 2)} to {round(current, 2)}"
+            elif b_mean != 0:
+                percent_change = (current - b_mean) / abs(b_mean)
+                comparison_ref = f"from baseline avg {round(b_mean, 2)} to {round(current, 2)}"
+            else:
+                continue
+
+            if abs(z_score) >= z_threshold and abs(percent_change) >= pct_threshold:
+                severity = "drop" if (z_score < 0 or percent_change < 0) else "spike"
                 direction = "dropped" if severity == "drop" else "spiked"
-                
+
                 anomalies.append({
                     "column": num_col,
                     "row_index": i,
                     "label": labels[i],
-                    "value": current,
-                    "previous_value": previous,
+                    "value": round(current, 2),
+                    "baseline_mean": round(b_mean, 2),
                     "percent_change": round(percent_change * 100, 1),
                     "z_score": round(z_score, 2),
                     "severity": severity,
                     "description": (
                         f"Metric '{num_col}' {direction} by {abs(round(percent_change * 100, 1))}% "
-                        f"(from {previous} to {current}) at '{labels[i]}', "
-                        f"deviating significantly from the baseline pattern."
-                    )
+                        f"({comparison_ref}) at '{labels[i]}', "
+                        f"deviating significantly from the baseline (Z-score: {round(z_score, 2)})."
+                    ),
                 })
-                
+
     return anomalies

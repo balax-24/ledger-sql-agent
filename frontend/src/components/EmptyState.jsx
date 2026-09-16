@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 
 const DEFAULT_SUGGESTIONS = [
-  "Show me the top 5 products by revenue this quarter",
+  "Show me the top 5 customers by revenue",
+  "Show monthly revenue trends for the last 12 months",
+  "Find unusual changes in monthly sales",
   "Draw me the ER diagram for this database",
-  "Create a flowchart showing how orders flow through our system",
-  "Which region has the most customers?",
+  "Explain how customers, orders, and products are related",
 ];
 
 export default function EmptyState({ onPick }) {

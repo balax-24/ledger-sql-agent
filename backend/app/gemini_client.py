@@ -1,26 +1,16 @@
 """
-All Google GenAI SDK specifics live in this one file. agent.py never touches
-`google.genai` types directly — it only sees plain dicts. That's what makes
-swapping providers (Claude, OpenAI) later a one-file change: write a
-claude_client.py with the same four function signatures and swap the import
-in agent.py.
-
-Uses the manual (non-automatic) function-calling flow so the agent loop in
-agent.py can emit its own SSE events between tool calls, and control which
-tool results get shown to the user as chart/diagram cards vs stay internal.
-
-Note on streaming: the final text answer is chunked and paced in agent.py
-rather than using the SDK's native token stream. Coordinating native
-streaming with manual multi-step function calling adds real complexity for
-a 24h build; chunking a complete response gives the same "typing" UX in the
-chat UI. If you have time left, `client.aio.models.generate_content_stream`
-is the upgrade path — same call shape, iterate chunks instead of one response.
+Gemini GenAI SDK integration with provider abstraction.
+agent.py interacts with the configured LLMProvider (RealGeminiProvider or MockGeminiProvider).
 """
-
+import asyncio
+import os
+import re
+from typing import Any
 from google import genai
 from google.genai import types, models, _common  # type: ignore
 
 from app.config import settings
+from app.logger import logger
 
 # --- MONKEY PATCHES TO PRESERVE & RE-INJECT THOUGHT SIGNATURES ---
 orig_Part_from_mldev = models._Part_from_mldev  # type: ignore
@@ -29,43 +19,48 @@ orig_Part_to_mldev = models._Part_to_mldev  # type: ignore
 orig_Part_to_vertex = models._Part_to_vertex  # type: ignore
 orig_from_response = _common.BaseModel._from_response  # type: ignore
 
+
 def patched_Part_from_mldev(api_client, from_object, parent_object=None):
     res = orig_Part_from_mldev(api_client, from_object, parent_object)  # type: ignore
     sig = None
     if isinstance(from_object, dict):
-        sig = from_object.get('thoughtSignature') or from_object.get('thought_signature')
-    elif hasattr(from_object, 'thoughtSignature'):
-        sig = getattr(from_object, 'thoughtSignature')
-    elif hasattr(from_object, 'thought_signature'):
-        sig = getattr(from_object, 'thought_signature')
-        
+        sig = from_object.get("thoughtSignature") or from_object.get("thought_signature")
+    elif hasattr(from_object, "thoughtSignature"):
+        sig = getattr(from_object, "thoughtSignature")
+    elif hasattr(from_object, "thought_signature"):
+        sig = getattr(from_object, "thought_signature")
+
     if sig:
-        res['_thought_signature'] = sig
+        res["_thought_signature"] = sig
     return res
+
 
 def patched_Part_from_vertex(api_client, from_object, parent_object=None):
     res = orig_Part_from_vertex(api_client, from_object, parent_object)  # type: ignore
     sig = None
     if isinstance(from_object, dict):
-        sig = from_object.get('thoughtSignature') or from_object.get('thought_signature')
-    elif hasattr(from_object, 'thoughtSignature'):
-        sig = getattr(from_object, 'thoughtSignature')
-    elif hasattr(from_object, 'thought_signature'):
-        sig = getattr(from_object, 'thought_signature')
-        
+        sig = from_object.get("thoughtSignature") or from_object.get("thought_signature")
+    elif hasattr(from_object, "thoughtSignature"):
+        sig = getattr(from_object, "thoughtSignature")
+    elif hasattr(from_object, "thought_signature"):
+        sig = getattr(from_object, "thought_signature")
+
     if sig:
-        res['_thought_signature'] = sig
+        res["_thought_signature"] = sig
     return res
+
 
 models._Part_from_mldev = patched_Part_from_mldev  # type: ignore
 models._Part_from_vertex = patched_Part_from_vertex  # type: ignore
+
+
 def patched_from_response(cls, response, kwargs):
     signatures = []
-    
+
     def extract_signatures(data, path=[]):
         if isinstance(data, dict):
-            if '_thought_signature' in data:
-                signatures.append((list(path), data.pop('_thought_signature')))
+            if "_thought_signature" in data:
+                signatures.append((list(path), data.pop("_thought_signature")))
             for k, v in data.items():
                 extract_signatures(v, path + [k])
         elif isinstance(data, list):
@@ -73,9 +68,9 @@ def patched_from_response(cls, response, kwargs):
                 extract_signatures(item, path + [idx])
 
     extract_signatures(response)
-    
+
     validated = orig_from_response.__func__(cls, response, kwargs)  # type: ignore
-    
+
     for path, sig in signatures:
         obj = validated
         for step in path:
@@ -83,6 +78,7 @@ def patched_from_response(cls, response, kwargs):
                 obj = obj[step]
             else:
                 from pydantic.alias_generators import to_snake
+
                 snake_step = to_snake(step)
                 if hasattr(obj, snake_step):
                     obj = getattr(obj, snake_step)
@@ -92,41 +88,44 @@ def patched_from_response(cls, response, kwargs):
                     obj = None
                     break
         if obj is not None:
-            object.__setattr__(obj, 'thought_signature', sig)
-            
+            object.__setattr__(obj, "thought_signature", sig)
+
     return validated
 
+
 _common.BaseModel._from_response = classmethod(patched_from_response)  # type: ignore
+
 
 def patched_Part_to_mldev(api_client, from_object, parent_object=None):
     res = orig_Part_to_mldev(api_client, from_object, parent_object)  # type: ignore
     sig = None
-    if hasattr(from_object, 'thought_signature'):
-        sig = getattr(from_object, 'thought_signature')
+    if hasattr(from_object, "thought_signature"):
+        sig = getattr(from_object, "thought_signature")
     elif isinstance(from_object, dict):
-        sig = from_object.get('thought_signature') or from_object.get('thoughtSignature')
-        
+        sig = from_object.get("thought_signature") or from_object.get("thoughtSignature")
+
     if sig:
-        res['thoughtSignature'] = sig
+        res["thoughtSignature"] = sig
     return res
+
 
 def patched_Part_to_vertex(api_client, from_object, parent_object=None):
     res = orig_Part_to_vertex(api_client, from_object, parent_object)  # type: ignore
     sig = None
-    if hasattr(from_object, 'thought_signature'):
-        sig = getattr(from_object, 'thought_signature')
+    if hasattr(from_object, "thought_signature"):
+        sig = getattr(from_object, "thought_signature")
     elif isinstance(from_object, dict):
-        sig = from_object.get('thought_signature') or from_object.get('thoughtSignature')
-        
+        sig = from_object.get("thought_signature") or from_object.get("thoughtSignature")
+
     if sig:
-        res['thoughtSignature'] = sig
+        res["thoughtSignature"] = sig
     return res
+
 
 models._Part_to_mldev = patched_Part_to_mldev  # type: ignore
 models._Part_to_vertex = patched_Part_to_vertex  # type: ignore
 # --- END MONKEY PATCHES ---
 
-_client = genai.Client(api_key=settings.gemini_api_key)
 
 SYSTEM_INSTRUCTION = """You are a data analyst assistant embedded in a chat app. \
 You have tools to inspect a Postgres database, run read-only SQL, explain query results in natural language, and render \
@@ -171,37 +170,6 @@ def build_history(messages: list[dict]) -> list[types.Content]:
     return history
 
 
-async def generate_turn(contents: list[types.Content], tool_declarations: list[dict]):
-    """One model turn. Caller inspects response.function_calls vs response.text."""
-    config = types.GenerateContentConfig(
-        tools=_build_tools(tool_declarations),  # type: ignore
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        system_instruction=SYSTEM_INSTRUCTION,
-        temperature=0.2,  # low temperature: this agent generates SQL, precision beats creativity
-    )
-    return await _client.aio.models.generate_content(
-        model=settings.gemini_model,
-        contents=contents,
-        config=config,
-    )
-
-
-async def generate_text(prompt: str, system_instruction: str | None = None) -> str:
-    """Centralized text generation helper to keep tools and modules provider-agnostic."""
-    config = None
-    if system_instruction:
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.2,
-        )
-    response = await _client.aio.models.generate_content(
-        model=settings.gemini_model,
-        contents=prompt,
-        config=config,
-    )
-    return response.text or ""
-
-
 def model_turn_content(response) -> types.Content:
     """The model's own turn (may contain a function_call part), to be
     appended to history verbatim before the tool result."""
@@ -210,4 +178,202 @@ def model_turn_content(response) -> types.Content:
 
 def function_response_content(name: str, response_data: dict) -> types.Content:
     part = types.Part.from_function_response(name=name, response=response_data)
-    return types.Content(role="tool", parts=[part])
+    return types.Content(role="user", parts=[part])
+
+
+class LLMProvider:
+    """Base interface for LLM operations to allow swapping real and mock providers."""
+
+    async def generate_turn(self, contents: list[types.Content], tool_declarations: list[dict]):
+        raise NotImplementedError
+
+    async def generate_text(self, prompt: str, system_instruction: str | None = None) -> str:
+        raise NotImplementedError
+
+    async def is_available(self) -> bool:
+        raise NotImplementedError
+
+
+class RealGeminiProvider(LLMProvider):
+    def __init__(self):
+        self._client: genai.Client | None = None
+        self._last_checked: float = 0.0
+        self._cached_available: bool = False
+
+    def _get_client(self) -> genai.Client:
+        if self._client is None:
+            if not settings.gemini_api_key:
+                raise ValueError("GEMINI_API_KEY environment variable is not configured.")
+            self._client = genai.Client(api_key=settings.gemini_api_key)
+        return self._client
+
+    async def generate_turn(self, contents: list[types.Content], tool_declarations: list[dict]):
+        client = self._get_client()
+        config = types.GenerateContentConfig(
+            tools=_build_tools(tool_declarations),  # type: ignore
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+        )
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            try:
+                return await client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as exc:
+                error_str = str(exc)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                is_unavailable = "503" in error_str or "UNAVAILABLE" in error_str
+                if (is_rate_limit or is_unavailable) and attempt < max_attempts - 1:
+                    import re
+                    match = re.search(r"retry(?:\s+in|\s+after)?\s+([0-9\.]+)\s*s", error_str, re.IGNORECASE)
+                    if not match:
+                        match = re.search(r'retryDelay["\']?\s*:\s*["\']?([0-9\.]+)s?', error_str, re.IGNORECASE)
+                    if match:
+                        backoff = float(match.group(1)) + 1.0
+                    else:
+                        backoff = (attempt + 1) * 5.0
+                    logger.warning("Gemini API rate limit/capacity hit. Retrying in %.1fs (attempt %d/%d)...", backoff, attempt + 1, max_attempts)
+                    await asyncio.sleep(backoff)
+                    continue
+                if is_unavailable:
+                    raise RuntimeError("The AI model service is temporarily at high capacity. Please retry.") from exc
+                if is_rate_limit:
+                    raise RuntimeError("AI API rate limit exceeded. Please wait a moment and try again.") from exc
+                raise
+
+    async def generate_text(self, prompt: str, system_instruction: str | None = None) -> str:
+        client = self._get_client()
+        config = None
+        if system_instruction:
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            )
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=prompt,
+                    config=config,
+                )
+                return response.text or ""
+            except Exception as exc:
+                error_str = str(exc)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                is_unavailable = "503" in error_str or "UNAVAILABLE" in error_str
+                if (is_rate_limit or is_unavailable) and attempt < max_attempts - 1:
+                    import re
+                    match = re.search(r"retry(?:\s+in|\s+after)?\s+([0-9\.]+)\s*s", error_str, re.IGNORECASE)
+                    if not match:
+                        match = re.search(r'retryDelay["\']?\s*:\s*["\']?([0-9\.]+)s?', error_str, re.IGNORECASE)
+                    if match:
+                        backoff = float(match.group(1)) + 1.0
+                    else:
+                        backoff = (attempt + 1) * 5.0
+                    logger.warning("Gemini API rate limit/capacity hit in text generation. Retrying in %.1fs (attempt %d/%d)...", backoff, attempt + 1, max_attempts)
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.warning("generate_text failed with model %s: %s", settings.gemini_model, exc)
+                if is_unavailable:
+                    raise RuntimeError("The AI model service is temporarily at high capacity. Please retry.") from exc
+                if is_rate_limit:
+                    raise RuntimeError("AI API rate limit exceeded. Please wait a moment and try again.") from exc
+                raise
+
+    async def is_available(self) -> bool:
+        if not settings.gemini_api_key:
+            return False
+        import time
+        now = time.time()
+        if (now - self._last_checked) < 60.0:
+            return self._cached_available
+        try:
+            client = self._get_client()
+            # Fast ping with 1 token
+            resp = await client.aio.models.generate_content(
+                model=settings.gemini_model,
+                contents="ping",
+            )
+            self._cached_available = bool(resp)
+            self._last_checked = now
+            return self._cached_available
+        except Exception:
+            self._cached_available = False
+            self._last_checked = now
+            return False
+
+
+class MockFunctionCall:
+    def __init__(self, name: str, args: dict):
+        self.name = name
+        self.args = args
+
+
+class MockCandidate:
+    def __init__(self, content):
+        self.content = content
+
+
+class MockResponse:
+    def __init__(self, text: str | None = None, function_calls: list[MockFunctionCall] | None = None):
+        self.text = text
+        self.function_calls = function_calls or []
+        parts = []
+        if text:
+            parts.append(types.Part.from_text(text=text))
+        if function_calls:
+            for fc in function_calls:
+                parts.append(types.Part.from_function_call(name=fc.name, args=fc.args))
+        content = types.Content(role="model", parts=parts)
+        self.candidates = [MockCandidate(content)]
+
+
+class MockGeminiProvider(LLMProvider):
+    """Deterministic mock provider for end-to-end testing and CI without calling external APIs."""
+
+    def __init__(self, turn_responses: list[MockResponse] | None = None, text_response: str = "Mock explanation"):
+        self.turn_responses = list(turn_responses or [])
+        self.text_response = text_response
+        self.call_count = 0
+
+    async def generate_turn(self, contents: list[types.Content], tool_declarations: list[dict]):
+        if self.turn_responses:
+            return self.turn_responses.pop(0)
+        return MockResponse(text="Mock default answer")
+
+    async def generate_text(self, prompt: str, system_instruction: str | None = None) -> str:
+        return self.text_response
+
+    async def is_available(self) -> bool:
+        return True
+
+
+# Global provider instance
+_provider: LLMProvider = RealGeminiProvider()
+
+
+def get_provider() -> LLMProvider:
+    return _provider
+
+
+def set_provider(provider: LLMProvider):
+    global _provider
+    _provider = provider
+
+
+# Convenience top-level functions used by agent.py and tools
+async def generate_turn(contents: list[types.Content], tool_declarations: list[dict]):
+    return await _provider.generate_turn(contents, tool_declarations)
+
+
+async def generate_text(prompt: str, system_instruction: str | None = None) -> str:
+    return await _provider.generate_text(prompt, system_instruction)
+
+
+async def is_model_available() -> bool:
+    return await _provider.is_available()

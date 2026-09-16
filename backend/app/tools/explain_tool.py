@@ -33,18 +33,31 @@ async def explain_data(query: str, data: list[dict], context: str = "") -> dict:
     try:
         explanation = await generate_text(prompt)
         if not explanation:
-            explanation = "Could not generate explanation for the data."
+            explanation = _generate_fallback_explanation(columns, data, anomalies)
         return {
             "success": True,
             "explanation": explanation,
-            "anomalies": anomalies
+            "anomalies": anomalies,
         }
     except Exception as exc:  # noqa: BLE001
+        fallback = _generate_fallback_explanation(columns, data, anomalies)
         return {
-            "success": False,
-            "error_type": "explanation_failed",
-            "message": str(exc)
+            "success": True,
+            "explanation": fallback,
+            "anomalies": anomalies,
+            "note": "AI explanation service unavailable; generated statistical summary.",
         }
+
+
+def _generate_fallback_explanation(columns: list[str], data: list[dict], anomalies: list[dict]) -> str:
+    parts = [f"Retrieved {len(data)} records across {len(columns)} fields: {', '.join(columns)}."]
+    if anomalies:
+        parts.append("\n\n**Detected Statistical Anomalies:**")
+        for a in anomalies:
+            parts.append(f"\n• {a['description']}")
+    else:
+        parts.append("\n\nAll metrics observed are within normal baseline ranges.")
+    return "".join(parts)
 
 EXPLAIN_DATA_TOOL_DECLARATION = {
     "name": "explain_data",

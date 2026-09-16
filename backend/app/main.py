@@ -1,22 +1,51 @@
 import json
+import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.agent import run_agent
 from app.config import settings
 from app.db import close_pool, get_pool
+from app.gemini_client import is_model_available
+from app.logger import logger, set_request_id
+from app.tools.schema_tool import get_schema
 
-app = FastAPI(title="LLM DB Agent")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Initializing Ledger backend server...")
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        logger.info("Database connection pool established successfully.")
+    except Exception as exc:
+        logger.warning("Database connection could not be established at startup: %s", exc)
+    yield
+    logger.info("Closing Ledger backend resources...")
+    await close_pool()
+
+app = FastAPI(title="Ledger DB Agent API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=[settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    req_id = request.headers.get("x-request-id") or f"req_{uuid.uuid4().hex[:8]}"
+    set_request_id(req_id)
+    response = await call_next(request)
+    response.headers["x-request-id"] = req_id
+    return response
 
 
 class Message(BaseModel):
@@ -28,22 +57,35 @@ class ChatRequest(BaseModel):
     messages: list[Message]
 
 
-@app.on_event("startup")
-async def startup():
-    await get_pool()  # fail fast on a bad DATABASE_URL instead of on the first chat request
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await close_pool()
-
-
-from app.tools.schema_tool import get_schema
-
-
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "model": settings.gemini_model}
+    db_status = "disconnected"
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        db_status = "connected"
+    except Exception as exc:
+        logger.warning("Health check: DB connection check failed: %s", exc)
+        db_status = "disconnected"
+
+    model_status = "unconfigured"
+    if settings.gemini_api_key:
+        try:
+            available = await is_model_available()
+            model_status = "available" if available else "degraded"
+        except Exception:
+            model_status = "degraded"
+
+    overall_status = "healthy" if (db_status == "connected" and model_status == "available") else "degraded"
+
+    return {
+        "status": overall_status,
+        "database": db_status,
+        "model": model_status,
+        "model_name": settings.gemini_model,
+        "row_limit": settings.query_row_limit,
+    }
 
 
 @app.get("/api/schema")
@@ -53,98 +95,35 @@ async def api_schema():
 
 @app.get("/api/starter-questions")
 async def starter_questions():
+    """Returns curated starter prompts based on dynamic schema introspection."""
     try:
         from app.tools.schema_tool import get_schema_data
         data = await get_schema_data()
         tables = data.get("tables", [])
-        
-        questions = []
         table_names = {t["name"].lower() for t in tables}
-        
-        # 1. Look for sales/orders/revenue/amount related queries
-        financial_table = None
-        revenue_col = None
-        for t in tables:
-            tname = t["name"].lower()
-            if any(k in tname for k in ["sale", "order", "invoice", "payment", "revenue", "transaction"]):
-                financial_table = t["name"]
-                for col in t["columns"]:
-                    cname = col["name"].lower()
-                    if any(k in cname for k in ["amount", "revenue", "total", "price", "subtotal", "sum"]):
-                        revenue_col = col["name"]
-                        break
-                if financial_table:
-                    break
 
-        if financial_table and revenue_col:
-            questions.append(f"What is the total revenue in the {financial_table} table?")
-            questions.append(f"Show the monthly trend of {revenue_col} from the {financial_table} table.")
-        elif financial_table:
-            questions.append(f"How many entries are in the {financial_table} table?")
-            questions.append(f"Show me the latest 5 transactions/orders from the {financial_table} table.")
+        questions = [
+            "Show me the top 5 customers by revenue",
+            "Show monthly revenue trends for the last 12 months",
+            "Find unusual changes in monthly sales",
+            "Draw me the ER diagram for this database",
+        ]
 
-        # 2. Look for customer/user/client related tables
-        customer_table = None
-        name_col = None
-        for t in tables:
-            tname = t["name"].lower()
-            if any(k in tname for k in ["customer", "user", "client", "member"]):
-                customer_table = t["name"]
-                for col in t["columns"]:
-                    cname = col["name"].lower()
-                    if any(k in cname for k in ["name", "email", "username", "first_name"]):
-                        name_col = col["name"]
-                        break
-                if customer_table:
-                    break
+        if "products" in table_names:
+            questions.append("Which products generate the highest profit margins?")
+        if "orders" in table_names:
+            questions.append("What is the distribution of order statuses?")
 
-        if customer_table:
-            if name_col:
-                questions.append(f"Who are the top customers/users listed in the {customer_table} table?")
-            else:
-                questions.append(f"List the first 10 records from the {customer_table} table.")
-
-        # 3. Look for product/item/inventory related tables
-        product_table = None
-        for t in tables:
-            tname = t["name"].lower()
-            if any(k in tname for k in ["product", "item", "inventory", "stock", "catalog"]):
-                product_table = t["name"]
-                break
-        
-        if product_table:
-            questions.append(f"What are the most popular products in the {product_table} table?")
-
-        # Fallbacks to ensure we always have 4 high-quality starter questions
-        all_table_names = [t["name"] for t in tables]
-        if len(questions) < 4 and all_table_names:
-            # Add general queries
-            for tname in all_table_names:
-                q1 = f"Show me a breakdown of the {tname} table."
-                if q1 not in questions and len(questions) < 4:
-                    questions.append(q1)
-                q2 = f"How many rows are in the {tname} table?"
-                if q2 not in questions and len(questions) < 4:
-                    questions.append(q2)
-
-        # Hardcoded default questions if database is completely empty or schema check failed
-        if not questions:
-            questions = [
-                "What tables are in my database?",
-                "Show me the total sales by product category.",
-                "Who are our top 5 customers by order count?",
-                "Which products are currently low on stock?"
-            ]
-
-        return {"questions": questions[:4]}
-    except Exception:
-        # Graceful fallback
+        return {"questions": questions[:5]}
+    except Exception as exc:
+        logger.warning("Starter questions fallback triggered: %s", exc)
         return {
             "questions": [
-                "What tables are in my database?",
-                "Show me the total sales by product category.",
-                "Who are our top 5 customers by order count?",
-                "Which products are currently low on stock?"
+                "Show me the top 5 customers by revenue",
+                "Show monthly revenue trends for the last 12 months",
+                "Find unusual changes in monthly sales",
+                "Draw me the ER diagram for this database",
+                "Which products generate the highest profit margins?",
             ]
         }
 
@@ -155,14 +134,22 @@ def _sse_format(event: str, data) -> str:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    if not req.messages:
+        return JSONResponse(status_code=400, content={"message": "No messages provided."})
+
     messages = [m.model_dump() for m in req.messages]
+    req_id = f"req_{uuid.uuid4().hex[:8]}"
 
     async def event_stream():
-        async for evt in run_agent(messages):
+        async for evt in run_agent(messages, request_id=req_id):
             yield _sse_format(evt["event"], evt["data"])
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "x-request-id": req_id,
+        },
     )

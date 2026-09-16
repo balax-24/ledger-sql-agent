@@ -1,29 +1,56 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ledger-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./backend/seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ledger_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: ledger-backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://agent_readonly:Mb5xcxCL8hoAygMr@postgres:5432/postgres
+      - DATABASE_ADMIN_URL=postgresql://postgres:postgrespassword@postgres:5432/postgres
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:5173}
     env_file:
       - ./backend/.env
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL}
-      - FRONTEND_ORIGIN=http://localhost:5173
-    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: ledger-frontend
+    restart: unless-stopped
     ports:
       - "5173:5173"
     environment:
       - VITE_API_BASE=http://localhost:8000
     depends_on:
       - backend
-    restart: always
+
+volumes:
+  ledger_pgdata:

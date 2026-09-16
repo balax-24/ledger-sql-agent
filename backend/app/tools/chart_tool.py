@@ -28,6 +28,22 @@ async def generate_chart(chart_type: str, title: str, x_field: str, y_field: str
             ),
         }
 
+    import decimal
+    from app.config import settings
+
+    clean_data = []
+    for row in data[:settings.query_row_limit]:
+        r = dict(row)
+        val = r.get(y_field)
+        if isinstance(val, decimal.Decimal):
+            r[y_field] = float(val)
+        elif isinstance(val, str):
+            try:
+                r[y_field] = float(val)
+            except ValueError:
+                pass
+        clean_data.append(r)
+
     return {
         "success": True,
         "spec": {
@@ -35,7 +51,7 @@ async def generate_chart(chart_type: str, title: str, x_field: str, y_field: str
             "title": title,
             "x_field": x_field,
             "y_field": y_field,
-            "data": data[:200],  # keep the payload sane even if the model passes a big result set
+            "data": clean_data,
         },
     }
 
