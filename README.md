@@ -2,6 +2,8 @@
 
 **An Autonomous Natural-Language Analytics Platform with Defense-in-Depth SQL Security**
 
+![Ledger chart generation](assets/chart_generation.png)
+
 > "Translate natural language or voice commands into read-only SQL, generate interactive charts, detect statistical anomalies, inspect dynamic schema relationships, and self-correct queries safely — backed by rigorous AST parsing and database-level least privilege."
 
 ---
@@ -31,6 +33,7 @@
 13. [Pre-Demo Smoke Test](#13-pre-demo-smoke-test)
 14. [Live Demo Walkthrough](#14-live-demo-walkthrough)
 15. [Setup & Running Instructions (Docker & Local)](#15-setup--running-instructions-docker--local)
+16. [Screenshots](#16-screenshots)
 
 ---
 
@@ -107,7 +110,7 @@ When an initial query encounters a database error (such as a misspelled table na
 flowchart TD
     User([User Prompt / Voice]) <-->|1. Input & Visualizations| UI[React 18 + Vite Frontend]
     UI <-->|2. Server-Sent Events SSE Stream| Backend[FastAPI Backend Application]
-    Backend <-->|3. Tool Calling Protocol| LLM[Google Gemini 3.5 Flash]
+    Backend <-->|3. Tool Calling Protocol| LLM[Google Gemini 3.5 Flash-Lite]
 
     subgraph Security_Engine [Defense-in-Depth Security Engine]
         Backend -->|4. AST Parse & Security Policy| AST[SQLGlot AST Validator]
@@ -125,6 +128,8 @@ flowchart TD
     Anomaly -->|10. Streamed Tool Badges & Data Payloads| UI
     Diagram -->|10. Streamed Tool Badges & Data Payloads| UI
 ```
+
+A compact one-page version of this flow lives in [Architecture.md](Architecture.md).
 
 ---
 
@@ -187,11 +192,10 @@ hackathon-agent/
 │   │   └── analysis/                # Mathematical engine
 │   │       └── anomaly.py           # Z-score & percentage deviation anomaly detection
 │   │
-│   ├── tests/                       # Pytest automated test suite (55 tests)
-│   │   ├── test_sql_security.py     # 18 AST validation & injection tests
+│   ├── tests/                       # Pytest automated test suite (57 tests)
+│   │   ├── test_sql_security.py     # 22 AST validation & injection tests
 │   │   ├── test_self_correction.py  # Self-correction security & re-validation tests
 │   │   ├── test_anomaly_detection.py# Statistical math, Z-score, & edge case tests
-│   │   ├── test_schema_and_diagrams.py # Schema caching & Mermaid syntax tests
 │   │   ├── test_api_and_integration.py # MockGemini end-to-end integration tests
 │   │   └── test_tools.py            # Tool specification & registry tests
 │   │
@@ -221,6 +225,8 @@ hackathon-agent/
 │   └── smoke_test.sh                # Executable shell runner for smoke test
 │
 ├── docker-compose.yml               # Production Compose stack (postgres, backend, frontend)
+├── Architecture.md                # One-page request-flow diagram
+├── PRESENTATION_PLAYBOOK.md       # Hackathon pitch & live demo playbook
 ├── DEMO_GUIDE.md                    # 5-minute judge demo script & presentation flow
 ├── EVALUATION_GUIDE.md              # Evaluator & judge documentation
 └── README.md                        # Master documentation
@@ -240,7 +246,7 @@ hackathon-agent/
 | **SQL Security** | SQLGlot 25.0+ | Abstract Syntax Tree (AST) query validation |
 | **Database Client** | asyncpg 0.29+ | High-throughput asynchronous PostgreSQL client |
 | **Database** | PostgreSQL 16 (Alpine) | Relational store with role-based least privilege |
-| **LLM Provider** | Google GenAI SDK (Gemini 3.5 Flash) | Natural language reasoning & tool selection |
+| **LLM Provider** | Google GenAI SDK (Gemini 3.5 Flash-Lite) | Natural language reasoning & tool selection |
 
 ---
 
@@ -252,7 +258,7 @@ The backend uses Pydantic v2 settings. Configure environment variables in `backe
 |---|---|---|---|
 | `GEMINI_API_KEY` | **Yes** | — | Google AI Studio Gemini API Key |
 | `GEMINI_MODEL` | No | `gemini-3.5-flash-lite` | Gemini model version |
-| `DATABASE_URL` | **Yes** | `postgresql://agent_readonly:Mb5xcxCL8hoAygMr@localhost:5433/postgres` | Restricted read-only PostgreSQL connection string |
+| `DATABASE_URL` | **Yes** | `postgresql://agent_readonly:ledger_readonly_dev@localhost:5433/postgres` | Restricted read-only PostgreSQL connection string |
 | `QUERY_ROW_LIMIT` | No | `100` | Maximum rows returned per analytical query |
 | `QUERY_TIMEOUT_SECONDS` | No | `5.0` | Maximum execution time in seconds per query |
 | `ANOMALY_Z_SCORE_THRESHOLD` | No | `2.0` | Z-score threshold for outlier detection |
@@ -260,6 +266,8 @@ The backend uses Pydantic v2 settings. Configure environment variables in `backe
 | `FRONTEND_ORIGIN` | No | `http://localhost:5173` | Allowed CORS origin |
 
 ---
+
+> **Credentials:** `ledger_readonly_dev` is a throwaway password for the local Docker database only (set in `backend/schema.sql` and `docker-compose.yml`). Use your own strong password for any shared or hosted database, and never commit `backend/.env`.
 
 ## 9. API Reference
 
@@ -353,12 +361,11 @@ pytest -q
 ```
 
 ### Test Breakdown:
-- **`test_sql_security.py` (18 tests)**: Verifies AST rejection of `DELETE`, `UPDATE`, `INSERT`, `DROP`, `ALTER`, `TRUNCATE`, `SELECT ... FOR UPDATE`, stacked queries, `pg_sleep`, filesystem access, and verifies `LIMIT 100` enforcement.
+- **`test_sql_security.py` (22 tests)**: Verifies AST rejection of `DELETE`, `UPDATE`, `INSERT`, `DROP`, `ALTER`, `TRUNCATE`, `SELECT ... FOR UPDATE`, stacked queries, `pg_sleep`, filesystem access, and verifies `LIMIT 100` enforcement.
 - **`test_self_correction.py` (5 tests)**: Verifies that self-correction recovers from syntax errors, blocks malicious `DELETE` and `DROP TABLE` corrections, blocks row locking, and handles failures cleanly.
 - **`test_anomaly_detection.py` (9 tests)**: Verifies statistical spike detection, drop detection, normal series, datasets $<6$ rows, constant series, decimal amounts, ID column filtering, and exact seeded May 2026 anomaly (+235.7%, Z = 25.02).
-- **`test_schema_and_diagrams.py` (5 tests)**: Verifies catalog introspection, foreign key mapping, schema TTL caching, and Mermaid ER syntax generation.
-- **`test_api_and_integration.py` (5 tests)**: Full end-to-end integration test using `MockGeminiProvider`, checking SSE streaming, `/api/health`, `/api/schema`, and error sanitization.
-- **`test_tools.py` (15 tests)**: Unit testing individual agent tool schemas and outputs.
+- **`test_api_and_integration.py` (5 tests)**: Full end-to-end integration test using `MockGeminiProvider`, checking SSE streaming, `/api/health`, `/api/schema`, and error sanitization. `test_api_schema` needs the PostgreSQL container running (`docker compose up -d postgres`).
+- **`test_tools.py` (16 tests)**: Unit tests for individual agent tools, including schema introspection, foreign-key mapping, TTL caching and Mermaid ER generation.
 
 ---
 
@@ -395,7 +402,7 @@ Before demonstrating to judges, run the automated smoke test script to verify da
 
 ## 14. Live Demo Walkthrough
 
-Follow these 5 recommended prompts during your hackathon presentation (see [DEMO_GUIDE.md](file:///home/buzzard/Documents/Projects/Sairam%20Hackathon/hackathon-agent/DEMO_GUIDE.md) for full script):
+Follow these 6 recommended prompts during your hackathon presentation (see [DEMO_GUIDE.md](DEMO_GUIDE.md) for the full script):
 
 1. **Analytical Query & Chart**:
    `"Show me the top 5 customers by revenue"`
@@ -456,7 +463,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Verify backend/.env contains your GEMINI_API_KEY and DATABASE_URL:
-# DATABASE_URL=postgresql://agent_readonly:Mb5xcxCL8hoAygMr@localhost:5433/postgres
+# DATABASE_URL=postgresql://agent_readonly:ledger_readonly_dev@localhost:5433/postgres
 
 # Run pre-demo smoke test
 ../scripts/smoke_test.sh
@@ -473,3 +480,11 @@ npm install
 npm run dev
 ```
 Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+---
+
+## 16. Screenshots
+
+| Chart generation | ER diagram | Schema explorer |
+|---|---|---|
+| ![Chart generation](assets/chart_generation.png) | ![ER diagram](assets/er_diagram.png) | ![Schema explorer](assets/schema_explorer.png) |

@@ -6,3 +6,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .DS_Store
+
+# Local debugging scripts (may contain connection strings)
+backend/scratch/

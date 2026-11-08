@@ -9,7 +9,7 @@ class Settings:
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
     database_url: str = os.environ.get(
         "DATABASE_URL",
-        "postgresql://agent_readonly:Mb5xcxCL8hoAygMr@localhost:5433/postgres",
+        "postgresql://agent_readonly:ledger_readonly_dev@localhost:5433/postgres",
     )
     frontend_origin: str = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
     query_row_limit: int = int(os.environ.get("QUERY_ROW_LIMIT", "100"))

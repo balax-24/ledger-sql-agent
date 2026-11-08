@@ -44,9 +44,9 @@ create index if not exists idx_order_items_product on order_items(product_id);
 do $$
 begin
   if not exists (select from pg_roles where rolname = 'agent_readonly') then
-    create role agent_readonly login password 'Mb5xcxCL8hoAygMr';
+    create role agent_readonly login password 'ledger_readonly_dev';
   else
-    alter role agent_readonly with password 'Mb5xcxCL8hoAygMr';
+    alter role agent_readonly with password 'ledger_readonly_dev';
   end if;
 end
 $$;
