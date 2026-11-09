@@ -8,12 +8,11 @@
 
 ---
 
-## 👥 Team & College Details
-- **Team Name**: Blue Silver Avengers
-- **Institution**: Sri Sairam Engineering College
-- **Project Name**: Ledger
-- **Hackathon**: Sairam Hackathon-2026
-- **Team Members**: Balaharish S, Atchaya Santhiya D, Vishal Bharath V, Shruthi CS
+## 👤 Author & Credits
+- **Designed and built by**: [Balaharish Saravanan](https://github.com/balax-24) (Balaharish S): architecture, backend, security engine, frontend and tests.
+- **Project**: Ledger, built for **Sairam Hackathon-2026** at Sri Sairam Engineering College.
+- **Hackathon team credit**: presented as team **Blue Silver Avengers**, with thanks to Atchaya Santhiya D, Vishal Bharath V and Shruthi CS.
+- **License**: [MIT](LICENSE) © 2026 Balaharish Saravanan.
 
 ---
 
@@ -34,6 +33,7 @@
 14. [Live Demo Walkthrough](#14-live-demo-walkthrough)
 15. [Setup & Running Instructions (Docker & Local)](#15-setup--running-instructions-docker--local)
 16. [Screenshots](#16-screenshots)
+17. [License](#17-license)
 
 ---
 
@@ -170,7 +170,7 @@ Ledger detects outliers mathematically in `app/analysis/anomaly.py`:
 ## 6. Repository Structure
 
 ```text
-hackathon-agent/
+Ledger/
 │
 ├── backend/
 │   ├── app/
@@ -199,6 +199,7 @@ hackathon-agent/
 │   │   ├── test_api_and_integration.py # MockGemini end-to-end integration tests
 │   │   └── test_tools.py            # Tool specification & registry tests
 │   │
+│   ├── Dockerfile                   # Backend container image
 │   ├── pytest.ini                   # Pytest configuration & asyncio mode settings
 │   ├── requirements.txt             # Python production & test dependencies
 │   ├── schema.sql                   # Database DDL & agent_readonly role creation
@@ -206,29 +207,35 @@ hackathon-agent/
 │
 ├── frontend/
 │   ├── src/
+│   │   ├── api/chatStream.js        # SSE client for /api/chat
+│   │   ├── hooks/useChatStream.js   # Chat state & streaming hook
 │   │   ├── components/
-│   │   │   ├── Chat.jsx             # Conversational stream manager & message list
+│   │   │   ├── ChatWindow.jsx       # Conversational stream & message list
+│   │   │   ├── MessageBubble.jsx    # Message rendering for text, charts & diagrams
 │   │   │   ├── EmptyState.jsx       # Starter query cards with judge demo prompts
 │   │   │   ├── InputBar.jsx         # Textarea & voice dictation handler
-│   │   │   ├── SchemaExplorer.jsx   # Interactive slide-over table & column drawer
+│   │   │   ├── Sidebar.jsx          # Schema explorer drawer (tables & columns)
 │   │   │   ├── ChartCard.jsx        # Recharts visualizer, [Chart/Table] toggle, CSV export
-│   │   │   ├── DiagramCard.jsx      # Mermaid SVG renderer with error boundaries
+│   │   │   ├── MermaidCard.jsx      # Mermaid SVG renderer with error boundaries
+│   │   │   ├── ExplanationCard.jsx  # Plain-English insight & anomaly summary
 │   │   │   └── ToolActivity.jsx     # Real-time SSE tool execution badges
 │   │   ├── App.jsx                  # Main application layout & header
 │   │   ├── index.css                # Tailwind & custom glassmorphism styles
 │   │   └── main.jsx                 # React root mountpoint
+│   ├── Dockerfile                   # Frontend container image
 │   ├── package.json                 # Node dependencies (Vite, React 18, Recharts, Mermaid)
 │   └── vite.config.js               # Vite configuration & /api reverse proxy
 │
 ├── scripts/
-│   ├── smoke_test.py                # Pre-demo diagnostic verification script
-│   └── smoke_test.sh                # Executable shell runner for smoke test
+│   └── smoke_test.py                # Pre-demo diagnostic verification script
 │
+├── assets/                          # README screenshots
 ├── docker-compose.yml               # Production Compose stack (postgres, backend, frontend)
-├── Architecture.md                # One-page request-flow diagram
-├── PRESENTATION_PLAYBOOK.md       # Hackathon pitch & live demo playbook
+├── Architecture.md                  # One-page request-flow diagram
+├── PRESENTATION_PLAYBOOK.md         # Hackathon pitch & live demo playbook
 ├── DEMO_GUIDE.md                    # 5-minute judge demo script & presentation flow
 ├── EVALUATION_GUIDE.md              # Evaluator & judge documentation
+├── LICENSE                          # MIT License
 └── README.md                        # Master documentation
 ```
 
@@ -374,7 +381,7 @@ pytest -q
 Before demonstrating to judges, run the automated smoke test script to verify database connectivity, schema availability, analytical queries, security rejections, and anomaly math:
 
 ```bash
-./scripts/smoke_test.sh
+python scripts/smoke_test.py
 ```
 
 ### Verified Smoke Test Output:
@@ -466,7 +473,7 @@ pip install -r requirements.txt
 # DATABASE_URL=postgresql://agent_readonly:ledger_readonly_dev@localhost:5433/postgres
 
 # Run pre-demo smoke test
-../scripts/smoke_test.sh
+python ../scripts/smoke_test.py
 
 # Start backend server
 uvicorn app.main:app --reload --port 8000
@@ -488,3 +495,10 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 | Chart generation | ER diagram | Schema explorer |
 |---|---|---|
 | ![Chart generation](assets/chart_generation.png) | ![ER diagram](assets/er_diagram.png) | ![Schema explorer](assets/schema_explorer.png) |
+
+---
+
+## 17. License
+
+Ledger is released under the [MIT License](LICENSE).
+Copyright © 2026 Balaharish Saravanan.
